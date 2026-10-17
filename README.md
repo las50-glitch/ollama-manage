@@ -421,7 +421,13 @@ ollama-manage/
 │   └── js/chat.js            # логика чата: поток токенов, think, команды, настройки,
 │                             # действия над сообщениями, предпросмотр html/css/js
 ├── data/settings.json        # создаётся при сохранении токена HF (в .gitignore)
+├── LICENSE                   # лицензия MIT
 ├── requirements.txt
 ├── run.sh                    # запуск на Linux и macOS
 └── run.bat                   # запуск на Windows (cmd)
 ```
+
+## Лицензия
+
+Проект распространяется по лицензии **MIT** — см. [LICENSE](LICENSE).
+
