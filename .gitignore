@@ -5,3 +5,16 @@ __pycache__/
 
 # настройки панели: в data/settings.json лежит токен Hugging Face
 data/
+
+# секреты и локальные файлы, которые не должны попадать в репозиторий
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.bak
+*.sqlite
+*.db
+.idea/
+.vscode/
