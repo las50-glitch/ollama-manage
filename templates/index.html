@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Панель управления Ollama</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14'>🦙</text></svg>">
+  <script>
+    /* Тема применяется до отрисовки страницы — иначе видна вспышка тёмного фона.
+       Выбор запоминается в localStorage ('ollama-theme'), при первом визите
+       берётся системная настройка. Кнопка переключения — в app.js. */
+    (function () {
+      var theme = 'dark';
+      try {
+        var saved = window.localStorage.getItem('ollama-theme');
+        if (saved === 'light' || saved === 'dark') {
+          theme = saved;
+        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+          theme = 'light';
+        }
+      } catch (err) {
+        /* localStorage недоступен — остаётся тёмная тема по умолчанию */
+      }
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">
+  <!-- редактор кода панели предпросмотра: лежит в репозитории (static/vendor),
+       поэтому панель работает без интернета; версия и состав — в README рядом -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/codemirror/codemirror.min.css') }}">
+</head>
+<body data-service="{{ service_name }}"
+      data-service-kind="{{ service_kind }}"
+      data-platform="{{ platform_name }}"
+      data-platform-label="{{ platform_label }}"
+      data-backend="{{ service_backend }}"
+      data-logs-available="{{ 'true' if logs_available else 'false' }}"
+      data-logs-source="{{ logs_source }}"
+      data-ollama-host="{{ ollama_host }}"
+      data-current-user="{{ current_user }}"
+      data-chat-model="{{ chat_model }}"
+      data-chat-keep-alive="{{ chat_keep_alive }}"
+      data-chat-think="{{ chat_think_default }}"
+      data-preload-keep-alive="{{ preload_keep_alive }}">
+<header class="topbar">
+  <div class="topbar-title">
+    <h1>🦙 Панель управления Ollama</h1>
+    <p class="muted">
+      API: <code>{{ ollama_host }}</code> · {{ service_kind }}: <code>{{ service_name }}</code>
+      · {{ platform_label }}
+    </p>
+  </div>
+  <div class="topbar-status">
+    <span class="badge" id="badge-version" title="Версия Ollama">Ollama: —</span>
+    <span class="badge" id="badge-service" title="Состояние {{ service_kind }}">{{ service_title }}: —</span>
+    <span class="badge" id="badge-models" title="Установлено моделей">Моделей: —</span>
+    <span class="badge" id="badge-running" title="Загружено в память">В памяти: —</span>
+    <button class="btn" id="btn-theme" type="button" title="Переключить на светлую тему">🌙 Тёмная</button>
+    <button class="btn" id="btn-refresh-all" type="button">Обновить всё</button>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab is-active" type="button" data-tab="models">Модели</button>
+  <button class="tab" type="button" data-tab="hf">Поиск на Hugging Face</button>
+  <button class="tab" type="button" data-tab="ps">Загруженные (ps)</button>
+  <button class="tab" type="button" data-tab="logs">Логи</button>
+  <button class="tab" type="button" data-tab="service">{{ service_title }}</button>
+</nav>
+
+<main>
+  <!-- ================= МОДЕЛИ ================= -->
+  <section class="tab-panel is-active" id="tab-models">
+    <div class="card">
+      <h2>Скачать модель</h2>
+      <div class="row">
+        <input class="input grow" id="pull-name" type="text" list="popular-models"
+               placeholder="например: llama3.2:3b или hf.co/user/repo:Q4_K_M" autocomplete="off">
+        <datalist id="popular-models">
+          <option value="llama3.2:3b"></option>
+          <option value="llama3.1:8b"></option>
+          <option value="qwen2.5:7b"></option>
+          <option value="mistral:7b"></option>
+          <option value="gemma2:9b"></option>
+          <option value="deepseek-r1:8b"></option>
+          <option value="phi4:14b"></option>
+          <option value="codellama:7b"></option>
+        </datalist>
+        <label class="checkbox" title="Разрешить скачивание без проверки TLS (аналог ollama pull --insecure)">
+          <input type="checkbox" id="pull-insecure"> insecure
+        </label>
+        <button class="btn btn-primary" id="btn-pull" type="button">Скачать</button>
+      </div>
+      <p class="hint">
+        Прогресс скачивания отображается ниже в реальном времени; дождитесь статуса «success».
+      </p>
+      <div class="pull-jobs" id="pull-jobs"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Установленные модели <span class="counter" id="models-counter">—</span></h2>
+        <div class="row">
+          <input class="input" id="models-filter" type="search" placeholder="Фильтр по имени…" autocomplete="off">
+          <label class="checkbox" title="На сколько держать модель в памяти после загрузки">
+            Держать:
+            <select class="input" id="preload-keep-alive" data-default="{{ preload_keep_alive }}">
+              <option value="5m">5 минут</option>
+              <option value="15m">15 минут</option>
+              <option value="30m">30 минут</option>
+              <option value="1h">1 час</option>
+              <option value="4h">4 часа</option>
+              <option value="-1">до выгрузки</option>
+            </select>
+          </label>
+          <button class="btn" id="btn-models-refresh" type="button">Обновить</button>
+        </div>
+      </div>
+      <p class="hint">
+        <strong>В память</strong> — предзагрузка модели (то же, что делает <code>ollama run</code> перед
+        первым ответом: веса читаются в память и держатся указанное время).
+        <strong>Чат</strong> — модальное окно чата в стиле CLI-режима <code>ollama run</code>
+        (закрывается по Esc, размышления моделей можно отключить).
+      </p>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Модель</th>
+              <th class="nowrap">Размер</th>
+              <th class="nowrap">Параметры</th>
+              <th class="nowrap">Квантование</th>
+              <th class="nowrap">Изменена</th>
+              <th class="nowrap right">Действия</th>
+            </tr>
+          </thead>
+          <tbody id="models-body"></tbody>
+        </table>
+      </div>
+      <p class="empty hidden" id="models-empty">Модели не найдены.</p>
+    </div>
+  </section>
+
+  <!-- ================= ПОИСК НА HUGGING FACE ================= -->
+  <section class="tab-panel" id="tab-hf">
+    <div class="card">
+      <div class="card-head">
+        <h2>Токен Hugging Face</h2>
+        <span class="badge" id="hf-token-state">состояние неизвестно</span>
+      </div>
+      <div class="row">
+        <input class="input grow" id="hf-token-input" type="password" autocomplete="off"
+               placeholder="hf_… — токен с правами read (huggingface.co/settings/tokens)">
+        <button class="btn btn-primary" id="btn-hf-token-save" type="button">Сохранить и проверить</button>
+        <button class="btn" id="btn-hf-token-clear" type="button">Удалить из панели</button>
+      </div>
+      <p class="hint" id="hf-token-result">
+        Токен нужен для закрытых (<em>gated</em>) и приватных репозиториев: с ним панель видит их
+        в поиске и показывает кванты. Хранится в файле настроек панели с правами 600 и в браузер
+        не передаётся. Чтобы <code>ollama pull hf.co/…</code> мог скачать такой репозиторий,
+        пропишите токен в окружение Ollama вручную (в systemd — <code>systemctl edit</code>,
+        в Windows и macOS — переменная окружения <code>HF_TOKEN</code>) — панель
+        привилегированных команд не выполняет.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Поиск GGUF-моделей на Hugging Face</h2>
+      <div class="row">
+        <input class="input grow" id="hf-query" type="search"
+               placeholder="например: qwen2.5 coder 7b instruct" autocomplete="off">
+        <select class="input" id="hf-sort" title="Сортировка выдачи">
+          <option value="downloads">по загрузкам</option>
+          <option value="likes">по лайкам</option>
+          <option value="trending">по тренду</option>
+          <option value="updated">по обновлению</option>
+        </select>
+        <label class="checkbox">Результатов:
+          <input class="input input-sm" id="hf-limit" type="number" min="1" max="{{ hf_limit_max }}"
+                 value="{{ hf_limit_default }}">
+        </label>
+        <button class="btn btn-primary" id="btn-hf-search" type="button">Искать</button>
+      </div>
+      <p class="hint">
+        Поиск идёт с сервера панели через публичный API <code>huggingface.co/api</code> (фильтр <code>gguf</code>),
+        поэтому в браузер ничего лишнего не попадает. Если задан токен из блока выше, в выдачу
+        попадают и закрытые репозитории.
+      </p>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Репозиторий</th>
+              <th class="nowrap">Загрузки</th>
+              <th class="nowrap">Лайки</th>
+              <th class="nowrap">Обновлён</th>
+              <th class="nowrap right">Действия</th>
+            </tr>
+          </thead>
+          <tbody id="hf-body"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="hf-empty">Введите запрос и нажмите «Искать».</p>
+    </div>
+  </section>
+
+  <!-- ================= PS ================= -->
+  <section class="tab-panel" id="tab-ps">
+    <div class="card">
+      <div class="card-head">
+        <h2>Загруженные в память <span class="counter" id="ps-counter">—</span></h2>
+        <div class="row">
+          <label class="checkbox">
+            <input type="checkbox" id="ps-autorefresh" checked> автообновление
+          </label>
+          <select class="input" id="ps-interval">
+            <option value="2000">2 с</option>
+            <option value="5000" selected>5 с</option>
+            <option value="10000">10 с</option>
+            <option value="30000">30 с</option>
+          </select>
+          <button class="btn" id="btn-ps-refresh" type="button">Обновить</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Модель</th>
+              <th class="nowrap">Размер</th>
+              <th class="nowrap">В видеопамяти</th>
+              <th class="nowrap">Параметры</th>
+              <th class="nowrap">Истекает</th>
+              <th class="nowrap right">Действия</th>
+            </tr>
+          </thead>
+          <tbody id="ps-body"></tbody>
+        </table>
+      </div>
+      <p class="empty hidden" id="ps-empty">
+        Сейчас ни одна модель не загружена в память (аналог пустого вывода <code>ollama ps</code>).
+      </p>
+    </div>
+  </section>
+
+  <!-- ================= ЛОГИ ================= -->
+  <section class="tab-panel" id="tab-logs">
+    <div class="card">
+      <div class="card-head">
+        <h2>{{ logs_title }} <code>{{ logs_source }}</code></h2>
+        <div class="row">
+          <label class="checkbox">
+            Последних строк:
+            <input class="input input-sm" id="log-lines" type="number" min="1" max="{{ max_lines }}"
+                   value="{{ default_lines }}">
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" id="log-autoscroll" checked> автоскролл
+          </label>
+          <button class="btn btn-primary" id="btn-log-start" type="button">▶ Поток</button>
+          <button class="btn" id="btn-log-stop" type="button" disabled>■ Стоп</button>
+          <button class="btn" id="btn-log-snapshot" type="button">Снимок</button>
+          <button class="btn" id="btn-log-clear" type="button">Очистить</button>
+        </div>
+      </div>
+      <div class="row">
+        <input class="input grow" id="log-filter" type="search"
+               placeholder="Подсветить строки, содержащие… (например: error, /api/pull)" autocomplete="off">
+        <span class="badge" id="log-state">поток не запущен</span>
+      </div>
+      <pre class="log-view" id="log-view" aria-live="polite"></pre>
+      <p class="error hidden" id="log-unavailable"></p>
+      <p class="hint">{{ logs_hint }}</p>
+    </div>
+  </section>
+
+  <!-- ================= СЛУЖБА ================= -->
+  <section class="tab-panel" id="tab-service" data-service="{{ service_name }}">
+    <div class="card">
+      <div class="card-head">
+        <h2>{{ service_title }} <code>{{ service_name }}</code></h2>
+        <div class="row">
+          <button class="btn" id="btn-service-refresh" type="button">Обновить состояние</button>
+        </div>
+      </div>
+      <dl class="status-grid" id="service-status">
+        <div><dt>Состояние</dt><dd id="st-active">—</dd></div>
+        <div><dt>Подсостояние</dt><dd id="st-sub">—</dd></div>
+        <div><dt>Автозапуск</dt><dd id="st-enabled">—</dd></div>
+        <div><dt>Главный PID</dt><dd id="st-pid">—</dd></div>
+        <div><dt>Память</dt><dd id="st-memory">—</dd></div>
+        {# Перезапуски и время старта известны только службе systemd. #}
+        <div data-backend="systemd"><dt>Перезапусков</dt><dd id="st-restarts">—</dd></div>
+        <div data-backend="systemd"><dt>Активна с</dt><dd id="st-since">—</dd></div>
+        <div data-backend="systemd"><dt>Запущена</dt><dd id="st-started">—</dd></div>
+      </dl>
+    </div>
+
+    <div class="card">
+      <h2>Управление</h2>
+      <p class="hint">{{ service_hint }}</p>
+    </div>
+  </section>
+</main>
+
+<!-- ================= МОДАЛЬНОЕ ОКНО ЧАТА (в стиле `ollama run`) ================= -->
+<div class="modal hidden" id="modal-chat">
+  <div class="modal-box chat-modal-box">
+    <!-- крестик закрытия: закреплён в правом верхнем углу окна, чтобы не терялся
+         среди кнопок шапки и оставался на месте при открытом предпросмотре -->
+    <button class="btn chat-close" id="btn-chat-close" type="button"
+            aria-label="Закрыть окно чата" title="Закрыть окно чата (Esc)">✕</button>
+    <header class="chat-header">
+      <div class="chat-title">
+        <h3>🦙 ollama run <span id="chat-model-title">—</span></h3>
+        <p class="muted">
+          API: <code>{{ ollama_host }}</code> · {{ service_kind }}: <code>{{ service_name }}</code> ·
+          пользователь: <code>{{ current_user }}</code>
+        </p>
+      </div>
+      <div class="chat-controls">
+        <label class="checkbox">Модель:
+          <select class="input" id="chat-model"></select>
+        </label>
+        <button class="btn" id="btn-load" type="button" title="Загрузить модель в память (то же делает ollama run)">В память</button>
+        <button class="btn" id="btn-unload" type="button" title="Выгрузить модель из памяти">Выгрузить</button>
+        <button class="btn" id="btn-think" type="button"
+                title="Размышления модели: авто — как решит сама модель, выкл — передать think=false, вкл — think=true">
+          Размышления: авто
+        </button>
+        <button class="btn" id="btn-settings" type="button">Настройки</button>
+        <button class="btn" id="btn-preview" type="button"
+                title="Показать html/css/js из последнего ответа в панели предпросмотра справа">Предпросмотр</button>
+        <button class="btn" id="btn-clear" type="button"
+                title="Забыть историю диалога и очистить окно чата (то же делает /clear)">Очистить контекст</button>
+        <button class="btn btn-danger" id="btn-bye" type="button" title="Выгрузить модель и закрыть окно чата">/bye</button>
+        <button class="btn" id="btn-chat-theme" type="button" title="Переключить тему панели">🌙</button>
+      </div>
+    </header>
+
+    <div class="chat-status">
+      <span class="badge" id="badge-model">модель: —</span>
+      <span class="badge" id="badge-memory">в памяти: —</span>
+      <span class="badge" id="badge-keepalive">keep_alive: —</span>
+      <span class="badge" id="badge-context">сообщений: 0</span>
+      <span class="badge" id="badge-stats">токенов: —</span>
+      <label class="checkbox"><input type="checkbox" id="chat-autoscroll" checked> автоскролл</label>
+    </div>
+
+    <div class="chat-main">
+      <div class="chat-view" id="chat-view" aria-live="polite"></div>
+
+      <form class="chat-input-row" id="chat-form">
+        <textarea class="chat-input" id="chat-input" rows="2" autocomplete="off"
+                  placeholder="Сообщение… Enter — отправить, Shift+Enter — новая строка, /help — команды"></textarea>
+        <div class="chat-buttons">
+          <button class="btn btn-primary" id="btn-send" type="submit">Отправить ⏎</button>
+          <button class="btn btn-danger" id="btn-stop" type="button" disabled>■ Стоп</button>
+        </div>
+      </form>
+
+      <p class="hint">
+        Токены приходят потоком из <code>/api/chat</code> — это тот же эндпоинт, которым пользуется
+        <code>ollama run</code>. Сообщения показываются пузырями: справа ваши, слева ответы модели,
+        ответы разбираются как <b>Markdown</b> (заголовки, списки, таблицы, ссылки, код с кнопкой
+        «копировать»). У «размышляющих» моделей (qwen3, deepseek-r1 и подобных) блок размышлений
+        сворачивается, как только начинается ответ, — его можно раскрыть обратно или отключить
+        кнопкой «Размышления». Под каждым сообщением появляются кнопки (при наведении):
+        <b>«✎ Изменить»</b> у вашего вопроса — текст правится на месте, всё, что было после него,
+        отбрасывается и запрос уходит заново; <b>«↻ Перегенерировать»</b> у ответа модели — тот же
+        вопрос задаётся снова; <b>«▶ Продолжить»</b> — дописать ответ, если модель остановилась
+        на середине (лимит <code>num_predict</code>, обрыв потока, нажатый «Стоп»): прежний текст
+        уходит в модель последним сообщением, она продолжает с того же места, и токены
+        дописываются в тот же пузырь (то же делает команда <code>/continue</code>).
+        «Очистить контекст» (<code>/clear</code>) забывает историю диалога
+        и очищает окно. Блоки кода <b>html</b>, <b>css</b> и <b>js</b> получают кнопку
+        <b>«▶ предпросмотр»</b> — результат открывается в панели справа (или кнопкой
+        <b>«Предпросмотр»</b> в шапке) в изолированном <code>iframe</code>: его можно развернуть
+        на весь экран (кнопка <b>⛶</b>, выход по <code>Esc</code>), а выполнение скриптов
+        включается флажком <b>«скрипты»</b>. Скрипты выключены по умолчанию, поэтому
+        страница, которую рисует скрипт (canvas, SPA), выглядит пустой — подпись под
+        панелью об этом предупредит; внешние файлы (CDN, шрифты из интернета) не
+        загружаются: сеть в предпросмотре закрыта. Кнопка <b>«✎ код»</b> в шапке панели
+        открывает редактор (CodeMirror) с вкладками <b>html</b>, <b>css</b> и <b>js</b>:
+        правки сразу пересобирают страницу в том же изолированном iframe,
+        <code>Ctrl+Enter</code> применяет их немедленно, <code>Esc</code> возвращает к просмотру,
+        а <b>«сбросить»</b> берёт код заново из ответа модели (в файлы и в ответ правки не
+        пишутся). Тема панели переключается кнопкой в шапке
+        панели или иконкой в шапке чата (тёмная/светлая).
+        Команды: <code>/help</code>, <code>/clear</code>, <code>/continue</code>,
+        <code>/system текст</code>, <code>/think off</code>, <code>/temp 0.7</code>,
+        <code>/top_p 0.9</code>, <code>/ctx 8192</code>, <code>/predict 512</code>,
+        <code>/keep_alive 30m</code>, <code>/model имя</code>,
+        <code>/load</code>, <code>/unload</code>, <code>/ps</code>, <code>/bye</code>.
+      </p>
+    </div>
+
+    <!-- ================= ПРЕДПРОСМОТР HTML/CSS/JS =================
+         Изолированный iframe: у документа свой origin (нет allow-same-origin),
+         сеть и доступ к панели запрещены через CSP, который вшивается в srcdoc —
+         в том числе в готовую страницу модели. Флаги sandbox действуют только
+         при следующей загрузке, поэтому renderPreview() сначала выгружает srcdoc,
+         затем меняет sandbox и только потом грузит новый документ.
+         Блок «✎ код» — редактор (CodeMirror 5 из static/vendor): правки живут
+         только в этой панели, документ пересобирается из них и снова уходит
+         в изолированный iframe теми же правилами. -->
+    <aside class="chat-preview hidden" id="chat-preview" aria-label="Предпросмотр HTML/CSS/JS">
+      <header class="preview-head">
+        <span class="preview-title" id="preview-title">Предпросмотр</span>
+        <label class="checkbox" title="Выполнять скрипты внутри предпросмотра (по умолчанию выключено)">
+          <input type="checkbox" id="preview-scripts"> скрипты
+        </label>
+        <button class="btn btn-sm" id="btn-preview-edit" type="button"
+                title="Править код в панели (Ctrl+Enter — применить)">✎ код</button>
+        <button class="btn btn-sm" id="btn-preview-refresh" type="button"
+                title="Перерисовать предпросмотр">⟳</button>
+        <button class="btn btn-sm" id="btn-preview-fullscreen" type="button"
+                title="Развернуть на весь экран (Esc — вернуть)">⛶</button>
+        <button class="btn btn-sm" id="btn-preview-close" type="button"
+                title="Закрыть предпросмотр (Esc)">✕</button>
+      </header>
+      <!-- редактор кода: вкладки по языкам, живое обновление предпросмотра -->
+      <div class="preview-editor hidden" id="preview-editor">
+        <div class="editor-bar">
+          <div class="editor-tabs" id="preview-editor-tabs"></div>
+          <span class="editor-state" id="preview-editor-state">код из ответа модели</span>
+          <button class="btn btn-sm" id="btn-editor-reset" type="button"
+                  title="Вернуть код из ответа модели (правки отбрасываются)">сбросить</button>
+          <button class="btn btn-sm btn-primary" id="btn-editor-apply" type="button"
+                  title="Применить правки и перерисовать предпросмотр (Ctrl+Enter)">применить</button>
+        </div>
+        <div class="editor-host" id="preview-editor-host"></div>
+        <p class="editor-hint">
+          Правки живут только в этой панели: файлы на диске и текст ответа модели не меняются.
+          <code>Tab</code> — отступ, <code>Ctrl+Enter</code> — применить, <code>Esc</code> — вернуться к просмотру.
+        </p>
+      </div>
+      <div class="preview-frame-wrap">
+        <iframe class="preview-frame" id="preview-frame" title="Предпросмотр HTML"
+                sandbox="" referrerpolicy="no-referrer"></iframe>
+      </div>
+      <p class="preview-note" id="preview-note">
+        Изолированный <code>iframe</code>: нет доступа к панели, кукам и сети.
+      </p>
+    </aside>
+    <!-- ================= НАСТРОЙКИ ЧАТА ================= -->
+    <aside class="chat-settings hidden" id="chat-settings">
+      <div class="settings-head">
+        <h3>Параметры генерации</h3>
+        <button class="btn btn-sm" id="btn-settings-close" type="button">✕</button>
+      </div>
+      <label class="field">
+        <span>Системный промпт (system)</span>
+        <textarea class="input" id="set-system" rows="4"
+                  placeholder="Например: отвечай кратко и по-русски"></textarea>
+      </label>
+      <div class="settings-grid">
+        <label class="field">
+          <span>temperature</span>
+          <input class="input" id="set-temperature" type="number" step="0.05" min="0" max="2">
+        </label>
+        <label class="field">
+          <span>top_p</span>
+          <input class="input" id="set-top-p" type="number" step="0.05" min="0" max="1">
+        </label>
+        <label class="field">
+          <span>num_ctx</span>
+          <input class="input" id="set-num-ctx" type="number" step="512" min="512" max="131072">
+        </label>
+        <label class="field">
+          <span>num_predict</span>
+          <input class="input" id="set-num-predict" type="number" step="64" min="-1" max="8192">
+        </label>
+      </div>
+      <label class="field">
+        <span>Размышления модели (think)</span>
+        <select class="input" id="set-think">
+          <option value="auto">авто — как решит модель</option>
+          <option value="off">выключены (think=false)</option>
+          <option value="on">включены (think=true)</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>keep_alive (сколько держать модель в памяти)</span>
+        <select class="input" id="set-keep-alive">
+          <option value="5m">5 минут</option>
+          <option value="15m">15 минут</option>
+          <option value="30m">30 минут</option>
+          <option value="1h">1 час</option>
+          <option value="4h">4 часа</option>
+          <option value="-1">до выгрузки</option>
+          <option value="0">выгружать сразу</option>
+        </select>
+      </label>
+      <div class="row right">
+        <button class="btn" id="btn-settings-reset" type="button">Сбросить</button>
+        <button class="btn btn-primary" id="btn-settings-apply" type="button">Применить</button>
+      </div>
+      <p class="hint">
+        Пустое поле = параметр не передаётся, Ollama использует значение из Modelfile.
+        Изменение системного промпта начинает новый диалог. «Размышления: выключены»
+        передаёт <code>think=false</code>; включать размышления у моделей, которые их не
+        поддерживают, не нужно — Ollama ответит ошибкой.
+      </p>
+    </aside>
+  </div>
+</div>
+
+<!-- ================= МОДАЛЬНОЕ ОКНО ДЕТАЛЕЙ МОДЕЛИ ================= -->
+<div class="modal hidden" id="modal-details">
+  <div class="modal-box modal-wide">
+    <h3 id="details-title">Информация о модели</h3>
+    <div id="details-body"></div>
+    <div class="row right">
+      <button class="btn" id="details-close" type="button">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= МОДАЛЬНОЕ ОКНО ВЫБОРА КВАНТА ================= -->
+<div class="modal hidden" id="modal-quants">
+  <div class="modal-box modal-wide">
+    <h3 id="quants-title">Кванты модели</h3>
+    <p class="hint" id="quants-sub"></p>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th class="nowrap">Квант</th>
+            <th class="nowrap">Размер</th>
+            <th>Файл в репозитории</th>
+            <th class="nowrap right">Действия</th>
+          </tr>
+        </thead>
+        <tbody id="quants-body"></tbody>
+      </table>
+    </div>
+    <p class="error hidden" id="quants-error"></p>
+    <div class="row right">
+      <a class="btn" id="quants-page" href="#" target="_blank" rel="noreferrer noopener">Открыть на Hugging Face</a>
+      <button class="btn" id="quants-close" type="button">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script src="{{ url_for('static', filename='js/markdown.js') }}"></script>
+<!-- CodeMirror 5: редактор кода панели предпросмотра. Порядок важен — ядро,
+     затем режимы (xml/htmlmixed/css/javascript) и аддоны правки. -->
+<script src="{{ url_for('static', filename='vendor/codemirror/codemirror.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/mode/xml/xml.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/mode/css/css.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/mode/javascript/javascript.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/mode/htmlmixed/htmlmixed.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/edit/closebrackets.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/edit/closetag.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/codemirror/addon/edit/matchbrackets.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+</body>
+</html>
+

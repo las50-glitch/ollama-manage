@@ -1,0 +1,533 @@
+/* Окно чата (модальное окно панели) — терминальный вид в стиле `ollama run`.
+   Общая тема панели (кнопки, поля, бейджи, модальные окна) — в style.css;
+   здесь только специфика чата: окно вывода со скроллом, блок «размышлений»
+   и панель параметров генерации. */
+
+.chat-modal-box {
+  position: relative;
+  /* окно чата занимает 90% ширины экрана: вместе с панелью предпросмотра
+     и редактором кода внутри становится достаточно места */
+  width: 90vw;
+  height: min(88vh, 900px);
+  max-height: 92vh;
+  padding: 0;
+  gap: 0;
+  overflow: auto;
+}
+
+/* крестик закрытия окна: закреплён в правом верхнем углу окна (а не в ряду
+   кнопок шапки), поэтому он всегда на виду и не зависит от их переноса */
+.chat-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 6;
+  padding: 4px 10px;
+  line-height: 1;
+}
+
+/* окно чата с открытым предпросмотром: справа появляется вторая колонка.
+   Обычный режим — прежний flex-столбец, поэтому без предпросмотра разметка
+   окна не меняется. */
+.chat-modal-box.with-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 42%);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "chat-header  chat-header"
+    "chat-status  chat-status"
+    "chat-main    chat-preview";
+}
+.chat-modal-box.with-preview .chat-header { grid-area: chat-header; }
+.chat-modal-box.with-preview .chat-status { grid-area: chat-status; }
+.chat-modal-box.with-preview .chat-main { grid-area: chat-main; }
+.chat-modal-box.with-preview .chat-preview { grid-area: chat-preview; }
+
+/* ---------- шапка ---------- */
+.chat-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 56px 12px 16px; /* справа место под крестик закрытия окна */
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-title h3 { font-family: "Ubuntu Mono", "JetBrains Mono", Consolas, monospace; font-weight: 600; }
+.chat-title .muted { margin-top: 3px; }
+.chat-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chat-controls select.input { max-width: 280px; }
+
+/* ---------- строка состояния ---------- */
+.chat-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+
+/* ---------- окно вывода: занимает всю высоту и скроллится ---------- */
+.chat-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px 16px 14px;
+}
+
+.chat-view {
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow: auto;
+  padding: 12px 14px;
+  background: var(--term-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: "Ubuntu Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  word-break: break-word;
+  color: var(--term-text);
+}
+
+/* ---------- сообщения: пузыри и действия над ними ---------- */
+.msg { display: flex; margin: 0 0 10px; }
+.msg:last-child { margin-bottom: 0; }
+.msg-user { justify-content: flex-end; }
+.msg-assistant { justify-content: flex-start; }
+
+/* колонка сообщения: сам пузырь и строка кнопок под ним */
+.msg-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: min(78%, 820px);
+  min-width: 0;
+}
+.msg-user .msg-col { align-items: flex-end; }
+.msg-assistant .msg-col { align-items: flex-start; }
+
+.msg .bubble {
+  max-width: 100%;
+  padding: 9px 13px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bubble-bg);
+  color: var(--bubble-text);
+  overflow-wrap: anywhere;
+}
+
+/* пользователь — справа, текст как введён (переносы сохраняются) */
+.msg-user .bubble {
+  background: var(--bubble-user-bg);
+  border-color: var(--bubble-user-border);
+  color: var(--bubble-user-text);
+  white-space: pre-wrap;
+  border-bottom-right-radius: 4px;
+}
+
+/* модель — слева, внутри markdown */
+.msg-assistant .bubble { border-bottom-left-radius: 4px; }
+
+/* ---------- кнопки сообщения: «изменить», «перегенерировать», «продолжить» ---------- */
+.msg-actions {
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.12s ease-in-out;
+}
+.msg:hover .msg-actions,
+.msg:focus-within .msg-actions { opacity: 1; }
+/* на устройствах без наведения кнопки показываются всегда */
+@media (hover: none) {
+  .msg-actions { opacity: 1; }
+}
+
+.msg-action {
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.msg-action:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--bg-input);
+}
+/* пока идёт генерация, менять, перегенерировать и продолжать нечего */
+#chat-view.is-busy .msg-actions { opacity: 0; pointer-events: none; }
+
+/* ---------- правка сообщения пользователя (режим «изменить») ---------- */
+.msg-editor { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.msg-editor .msg-editor-input {
+  width: 100%;
+  min-height: 62px;
+  max-height: 200px;
+  padding: 8px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+.msg-editor .msg-editor-input:focus { outline: 2px solid var(--accent); }
+.msg-editor-actions { display: flex; gap: 6px; justify-content: flex-end; }
+/* на время правки колонка занимает всю ширину окна */
+.msg.is-editing .msg-col { width: 100%; max-width: 100%; }
+
+/* служебные строки: баннер, команды, ошибки, статистика */
+.msg-notice {
+  display: block;
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  font-size: 0.84rem;
+  color: var(--notice-text);
+}
+.msg-notice.system { color: var(--notice-system); }
+.msg-notice.error { color: var(--notice-error); }
+.msg-notice.meta { font-size: 0.8rem; }
+
+.chat-view .cursor { color: var(--accent); }
+
+/* ---------- «размышления» модели (thinking) ---------- */
+.think-block {
+  margin: 6px 0;
+  border: 1px solid var(--think-border);
+  border-radius: 8px;
+  background: var(--think-bg);
+  overflow: hidden;
+}
+
+.think-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  color: var(--think-text);
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-style: italic;
+  cursor: pointer;
+}
+.think-toggle:hover { background: var(--think-hover); }
+.think-arrow { display: inline-block; width: 12px; }
+.think-size { color: var(--think-size); }
+
+.think-body {
+  display: none;
+  padding: 8px 12px;
+  max-height: 260px;
+  overflow: auto;
+  border-top: 1px solid var(--think-border);
+  color: var(--think-body-text);
+  font-style: italic;
+  white-space: pre-wrap;
+}
+.think-block.is-open .think-body { display: block; }
+
+.msg-assistant .think-block { margin: 0 0 8px; }
+
+/* ---------- markdown в ответах модели ---------- */
+.md { white-space: normal; }
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+.md p { margin: 0 0 8px; }
+.md h3, .md h4, .md h5, .md h6 { margin: 12px 0 6px; font-weight: 600; line-height: 1.3; }
+.md h3 { font-size: 1.04rem; }
+.md h4 { font-size: 0.97rem; }
+.md h5, .md h6 { font-size: 0.9rem; color: var(--text-dim); }
+.md ul, .md ol { margin: 6px 0; padding-left: 22px; }
+.md li { margin: 2px 0; }
+.md a { color: var(--accent); }
+.md img { max-width: 100%; border-radius: 8px; }
+.md blockquote {
+  margin: 8px 0;
+  padding: 2px 12px;
+  border-left: 3px solid var(--quote-border);
+  color: var(--quote-text);
+}
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+.md code {
+  font-family: "Ubuntu Mono", "JetBrains Mono", Consolas, monospace;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 0.86em;
+  color: var(--code-text);
+}
+.md table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 0.84rem;
+  display: block;
+  overflow-x: auto;
+}
+.md th, .md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+.md th { background: var(--md-th-bg); }
+.md .md-placeholder { color: var(--text-dim); font-style: italic; }
+
+/* блок кода: строка с языком и кнопкой «копировать» не скроллится вместе с кодом */
+.md-code {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-block-bg);
+  overflow: hidden;
+}
+.md-code .code-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 4px 8px;
+  background: var(--code-bar-bg);
+  border-bottom: 1px solid var(--border);
+  min-height: 26px;
+}
+.md-code .code-lang { margin-right: auto; color: var(--code-lang); font-size: 0.74rem; }
+.md-code pre { margin: 0; padding: 10px 12px; overflow: auto; }
+.md-code pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.84rem;
+  color: var(--code-text);
+  white-space: pre;
+}
+.md-code .code-copy,
+.md-code .code-preview {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.md-code .code-copy:hover,
+.md-code .code-preview:hover { color: var(--text); border-color: var(--accent); }
+/* «предпросмотр» — кнопка с акцентом: она открывает панель справа */
+.md-code .code-preview { color: var(--accent); }
+
+/* ---------- ввод ---------- */
+.chat-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  margin-top: 12px;
+}
+
+.chat-input {
+  flex: 1 1 auto;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 10px 12px;
+  font-family: "Ubuntu Mono", Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 52px;
+  max-height: 220px;
+}
+.chat-input:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+
+.chat-buttons { display: flex; gap: 8px; }
+
+/* ---------- панель параметров (внутри модального окна) ---------- */
+.chat-settings {
+  position: absolute;
+  top: 64px;
+  right: 16px;
+  width: min(400px, calc(100% - 32px));
+  max-height: calc(100% - 92px);
+  overflow: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: 0 18px 50px var(--shadow);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.settings-head { display: flex; align-items: center; justify-content: space-between; }
+.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field > span { color: var(--text-dim); font-size: 0.78rem; }
+textarea.input { resize: vertical; font-family: "Ubuntu Mono", Consolas, monospace; }
+
+/* ---------- предпросмотр HTML/CSS/JS (панель справа от чата) ---------- */
+.chat-preview {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+}
+
+.preview-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border);
+}
+.preview-title { margin-right: auto; color: var(--text-dim); font-size: 0.8rem; }
+.preview-head .checkbox { font-size: 0.8rem; }
+
+/* фон страницы предпросмотра: --preview-bg объявлен в палитре style.css.
+   Обёртка — flex-контейнер, чтобы iframe занимал всю высоту панели, а не
+   зависел от разрешения height: 100% у auto-высотного родителя. */
+.preview-frame-wrap {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--preview-bg);
+}
+.preview-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--preview-bg);
+}
+
+.preview-note {
+  margin: 0;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.74rem;
+}
+.preview-note code { font-size: 0.9em; }
+
+/* ---------- редактор кода в панели предпросмотра (CodeMirror) ----------
+   Правки пересобирают тот же изолированный документ, поэтому редактор и кадр
+   делят высоту панели: редактор сверху, предпросмотр снизу. CodeMirror
+   требует ненулевой высоты у контейнера, поэтому .editor-host растянут
+   flex-ом, а сам .CodeMirror занимает height: 100%. */
+.preview-editor {
+  display: flex;
+  flex: 1 1 45%;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-soft);
+}
+.preview-editor.hidden { display: none; }
+
+.editor-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.editor-tabs { display: flex; gap: 6px; margin-right: auto; }
+.editor-tab { font-family: "Ubuntu Mono", "JetBrains Mono", Consolas, monospace; }
+.editor-tab.is-active { color: var(--accent); border-color: var(--accent); }
+.editor-state { color: var(--text-dim); font-size: 0.72rem; }
+
+.editor-host { flex: 1 1 auto; min-height: 140px; overflow: hidden; }
+.editor-host .CodeMirror {
+  height: 100%;
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: "Ubuntu Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+.editor-host .CodeMirror-gutters { background: var(--bg-soft); border-right: 1px solid var(--border); }
+.editor-host .CodeMirror-linenumber { color: var(--text-dim); }
+.editor-host .CodeMirror-cursor { border-left: 2px solid var(--accent); }
+.editor-host .CodeMirror-selected,
+.editor-host .CodeMirror-focused .CodeMirror-selected { background: var(--editor-selection); }
+.editor-host .cm-tag { color: var(--editor-tag); }
+.editor-host .cm-attribute { color: var(--editor-attr); }
+.editor-host .cm-keyword { color: var(--editor-key); }
+.editor-host .cm-string,
+.editor-host .cm-string-2 { color: var(--editor-string); }
+.editor-host .cm-comment { color: var(--editor-comment); font-style: italic; }
+.editor-host .cm-number { color: var(--editor-number); }
+.editor-host .cm-def,
+.editor-host .cm-variable-2,
+.editor-host .cm-property { color: var(--editor-fn); }
+.editor-host .cm-error { color: var(--notice-error); }
+
+/* запасной вариант, если CodeMirror не загрузился (например, файлы вендора
+   убрали) или его нельзя создать — как в jsdom, где нет раскладки:
+   обычная textarea с тем же набором кнопок и тем же поведением */
+.editor-fallback {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  resize: none;
+  padding: 8px 10px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: "Ubuntu Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.editor-hint {
+  margin: 0;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+.editor-hint code { font-size: 0.95em; }
+
+/* «на весь экран»: панель выходит из сетки окна и закрывает страницу */
+.chat-preview.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  border-left: 0;
+  background: var(--bg-card);
+}
+
+@media (max-width: 760px) {
+  .chat-header { flex-direction: column; align-items: flex-start; }
+  .chat-input-row { flex-direction: column; align-items: stretch; }
+  .chat-settings { top: 12px; max-height: calc(100% - 24px); }
+  /* на узком экране предпросмотр уезжает вниз, под чат */
+  .chat-modal-box.with-preview {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) minmax(160px, 40%);
+    grid-template-areas:
+      "chat-header"
+      "chat-status"
+      "chat-main"
+      "chat-preview";
+  }
+  .chat-preview { border-left: 0; border-top: 1px solid var(--border); }
+}

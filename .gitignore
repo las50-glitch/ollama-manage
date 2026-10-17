@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+*.log
+
+# настройки панели: в data/settings.json лежит токен Hugging Face
+data/
